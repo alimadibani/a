@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>مراجعة نشرتك — InboxLoops</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Lora:wght@500;600&family=IBM+Plex+Sans+Arabic:wght@400;500;600&display=swap" rel="stylesheet" media="print" onload="this.media='all'; this.onload=null;">
+<noscript><link href="https://fonts.googleapis.com/css2?family=Lora:wght@500;600&family=IBM+Plex+Sans+Arabic:wght@400;500;600&display=swap" rel="stylesheet"></noscript>
+<style>
+  :root{ --ink:#14213D; --paper:#F5F6F2; --paper-raised:#FFFFFF; --accent:#3F6659; --accent-soft:#E4EBE7; --text:#1E2430; --text-muted:#5B6470; --border:#DEE1DA; }
+  *{box-sizing:border-box;}
+  body{ font-family:'IBM Plex Sans Arabic', sans-serif; background:var(--paper); color:var(--text); margin:0; padding:24px; }
+  .wrap{ max-width:520px; margin:40px auto; }
+  h1{ font-family:'Lora', serif; color:var(--ink); font-size:20px; text-align:center; }
+  .card{ background:var(--paper-raised); border:1px solid var(--border); border-radius:14px; padding:22px; margin-top:20px; }
+  .draft-text{ white-space:pre-wrap; font-size:14.5px; line-height:1.8; background:var(--accent-soft); padding:16px; border-radius:10px; }
+  .actions{ display:flex; gap:10px; margin-top:18px; }
+  button{ flex:1; padding:12px; border:none; border-radius:10px; font-family:inherit; font-size:14px; cursor:pointer; }
+  .approve{ background:var(--accent); color:#fff; }
+  .edit{ background:transparent; color:var(--ink); border:1px solid var(--border) !important; }
+  textarea{ width:100%; min-height:90px; margin-top:12px; padding:10px; border:1px solid var(--border); border-radius:8px; font-family:inherit; display:none; }
+  .done{ text-align:center; color:var(--accent); font-size:15px; padding:30px 0; }
+  .muted{ color:var(--text-muted); font-size:13px; text-align:center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>مراجعة نشرتك الأسبوعية</h1>
+  <div id="content" class="card"><p class="muted">جارٍ التحميل…</p></div>
+</div>
+
+<script>
+function emailHtml(text){
+  const lines = escapeHtml(text).split('\n').filter(Boolean);
+  const subject = lines[0] || '';
+  const body = lines.slice(1).join('\n').replace(/\n/g, '<br>');
+  return `<div style="font-size:17px; font-weight:600; margin-bottom:12px;">${subject}</div><div>${body}</div>`;
+}
+
+function escapeHtml(value){
+  return String(value ?? '').replace(/[&<>"']/g, char => ({
+    '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'
+  }[char]));
+}
+
+const params = new URLSearchParams(location.search);
+const id = params.get('id');
+const token = params.get('token');
+const contentEl = document.getElementById('content');
+
+async function load(){
+  if(!id || !token){
+    contentEl.innerHTML = '<p class="muted">رابط غير صالح</p>';
+    return;
+  }
+  const res = await fetch(`/api/drafts?id=${id}&token=${token}`);
+  if(!res.ok){
+    contentEl.innerHTML = '<p class="muted">تعذر العثور على المسودة</p>';
+    return;
+  }
+  const draft = await res.json();
+  if(draft.magicToken !== token){
+    contentEl.innerHTML = '<p class="muted">رابط غير صالح</p>';
+    return;
+  }
+
+  // نشرات مكتملة (موافَق عليها أو مُرسلة) — تُعرض دائمًا للقراءة، بدون أزرار إجراء (أرشيف)
+  if(draft.status === 'ready_to_schedule' || draft.status === 'sent'){
+    contentEl.innerHTML = `
+      <div class="draft-text">${escapeHtml(draft.draftText)}</div>
+      <div class="done">✅ تمت الموافقة على هذه النشرة${draft.status === 'sent' ? ' وأُرسلت بالفعل' : ''}</div>
+    `;
+    return;
+  }
+
+  if(draft.status !== 'pending_client_review'){
+    contentEl.innerHTML = '<p class="muted">هذه المسودة قيد المراجعة الداخلية حاليًا، سنرسل لك رابطًا محدثًا قريبًا.</p>';
+    return;
+  }
+
+  // فحص انتهاء صلاحية الرابط (14 يومًا من آخر إرسال)
+  if(draft.magicTokenExpiry && Date.now() > draft.magicTokenExpiry){
+    contentEl.innerHTML = '<p class="muted">انتهت صلاحية رابط المراجعة هذا. تواصل معنا للحصول على رابط جديد.</p>';
+    return;
+  }
+
+  contentEl.innerHTML = `
+    <div class="draft-text">${escapeHtml(draft.draftText)}</div>
+    <textarea id="note" placeholder="اكتب ملاحظتك هنا..."></textarea>
+    <div class="actions">
+      <button class="approve" onclick="approve()">✅ موافق، انشرها</button>
+      <button class="edit" onclick="showNote()">✏️ أحتاج تعديل</button>
+    </div>
+  `;
+}
+
+function showNote(){
+  const note = document.getElementById('note');
+  note.style.display = 'block';
+  note.focus();
+  const editBtn = document.querySelector('.edit');
+  editBtn.textContent = 'إرسال الملاحظة';
+  editBtn.onclick = requestEdit;
+}
+
+async function approve(){
+  const res = await fetch('/api/drafts', {
+    method:'PATCH',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ id, action:'client_approve', magicToken: token })
+  });
+  if(!res.ok){ contentEl.innerHTML = '<p class="muted">تعذر تنفيذ الإجراء، الرابط قد يكون منتهيًا</p>'; return; }
+  contentEl.innerHTML = '<div class="done">✅ تمام! نشرتك بطريقها للجدولة والإرسال.</div>';
+}
+
+async function requestEdit(){
+  const note = document.getElementById('note').value.trim();
+  if(!note) return;
+  const res = await fetch('/api/drafts', {
+    method:'PATCH',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ id, action:'client_request_edit', note, magicToken: token })
+  });
+  if(!res.ok){ contentEl.innerHTML = '<p class="muted">تعذر تنفيذ الإجراء، الرابط قد يكون منتهيًا</p>'; return; }
+  contentEl.innerHTML = '<div class="done">📝 وصلتنا ملاحظتك، بنعدلها ونرجعلك قريبًا.</div>';
+}
+
+load();
+</script>
+</body>
+</html>

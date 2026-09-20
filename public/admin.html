@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>لوحة تحكم InboxLoops</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Lora:wght@500;600&family=IBM+Plex+Sans+Arabic:wght@400;500;600&display=swap" rel="stylesheet" media="print" onload="this.media='all'; this.onload=null;">
+<noscript><link href="https://fonts.googleapis.com/css2?family=Lora:wght@500;600&family=IBM+Plex+Sans+Arabic:wght@400;500;600&display=swap" rel="stylesheet"></noscript>
+<style>
+  :root{ --ink:#14213D; --paper:#F5F6F2; --paper-raised:#FFFFFF; --accent:#3F6659; --accent-soft:#E4EBE7; --text:#1E2430; --text-muted:#5B6470; --border:#DEE1DA; }
+  *{box-sizing:border-box;}
+  body{ font-family:'IBM Plex Sans Arabic', sans-serif; background:var(--paper); color:var(--text); margin:0; padding:24px; }
+  h1{ font-family:'Lora', serif; color:var(--ink); font-size:22px; }
+  .login-box{ max-width:340px; margin:80px auto; background:var(--paper-raised); border:1px solid var(--border); border-radius:12px; padding:24px; text-align:center; }
+  .login-box input{ width:100%; padding:10px; margin:12px 0; border:1px solid var(--border); border-radius:8px; font-family:inherit; }
+  .login-box button, .card button{ background:var(--accent); color:#fff; border:none; padding:9px 16px; border-radius:8px; cursor:pointer; font-family:inherit; font-size:13.5px; }
+  .card{ background:var(--paper-raised); border:1px solid var(--border); border-radius:12px; padding:18px; margin-bottom:16px; }
+  .card .status{ display:inline-block; font-size:11.5px; padding:3px 10px; border-radius:12px; background:var(--accent-soft); color:var(--accent); margin-bottom:8px; }
+  .card h3{ font-size:14.5px; margin:0 0 6px; }
+  .card textarea{ width:100%; min-height:120px; font-family:inherit; font-size:13.5px; padding:10px; border:1px solid var(--border); border-radius:8px; }
+  .card .actions{ display:flex; gap:8px; margin-top:10px; }
+  .btn-outline{ background:transparent !important; color:var(--ink) !important; border:1px solid var(--border) !important; }
+  .empty{ color:var(--text-muted); font-size:14px; text-align:center; padding:40px 0; }
+  .meta{ font-size:11.5px; color:var(--text-muted); margin-bottom:6px; }
+  .preview-tabs{ display:flex; gap:6px; margin-bottom:8px; }
+  .tab-btn{ background:transparent; border:1px solid var(--border); color:var(--text-muted); padding:6px 12px; border-radius:8px; font-size:12px; cursor:pointer; }
+  .tab-btn.active{ background:var(--accent-soft); color:var(--accent); border-color:var(--accent); }
+  .email-preview{ border:1px solid var(--border); border-radius:8px; padding:0; max-height:340px; overflow-y:auto; background:#fff; }
+  .email-preview-inner{ padding:20px; font-family:sans-serif; direction:rtl; line-height:1.8; }
+</style>
+</head>
+<body>
+
+<div id="login" class="login-box">
+  <h1>لوحة تحكم InboxLoops</h1>
+  <input id="loginEmail" type="email" placeholder="الإيميل">
+  <input id="pwd" type="password" placeholder="كلمة المرور">
+  <button onclick="login()" style="width:100%;">دخول</button>
+  <div id="loginError" style="color:#B3261E; font-size:12.5px; margin-top:8px;"></div>
+</div>
+
+<div id="dashboard" style="display:none; max-width:640px; margin:0 auto;">
+  <div style="display:flex; justify-content:space-between; align-items:center;">
+    <h1>مسودات بانتظار مراجعتك</h1>
+    <button onclick="logout()" style="background:transparent; color:var(--text-muted); border:1px solid var(--border); padding:6px 12px; border-radius:8px; cursor:pointer; font-family:inherit; font-size:12.5px;">تسجيل الخروج</button>
+  </div>
+  <div id="list"></div>
+  <h1 style="margin-top:32px;">عملاء محتملون جدد</h1>
+  <div id="leads-list"></div>
+</div>
+
+<script>
+let TOKEN = localStorage.getItem('inboxloops_admin_token') || '';
+
+function escapeHtml(value){
+  return String(value ?? '').replace(/[&<>"']/g, char => ({
+    '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'
+  }[char]));
+}
+
+async function login(){
+  const email = document.getElementById('loginEmail').value.trim();
+  const password = document.getElementById('pwd').value;
+  try{
+    const res = await fetch('/api/auth', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ email, password })
+    });
+    const data = await res.json();
+    if(!res.ok){
+      document.getElementById('loginError').textContent = data.error || 'فشل تسجيل الدخول';
+      return;
+    }
+    TOKEN = data.token;
+    localStorage.setItem('inboxloops_admin_token', TOKEN);
+    fetchDrafts();
+  }catch(e){
+    document.getElementById('loginError').textContent = 'تعذر الاتصال بالخادم';
+  }
+}
+
+async function fetchLeads(){
+  try{
+    const res = await fetch('/api/leads', { headers: { 'Authorization': `Bearer ${TOKEN}` } });
+    if(!res.ok) return;
+    const leads = await res.json();
+    const el = document.getElementById('leads-list');
+    if(leads.length === 0){ el.innerHTML = '<div class="empty">لا يوجد عملاء محتملون جدد</div>'; return; }
+    el.innerHTML = leads.map(l => `
+      <div class="card">
+        <h3>${escapeHtml(l.name)} — ${escapeHtml(l.email)}</h3>
+        ${l.newsletterLink ? `<div class="meta">نشرته الحالية: ${escapeHtml(l.newsletterLink)}</div>` : ''}
+        <div class="meta">${new Date(l.createdAt).toLocaleString('ar')}</div>
+      </div>
+    `).join('');
+  }catch(e){ /* تجاهل بصمت، ليست حرجة */ }
+}
+
+async function fetchDrafts(){
+  try{
+    const res = await fetch('/api/drafts', { headers: { 'Authorization': `Bearer ${TOKEN}` } });
+    if(res.status === 401){
+      localStorage.removeItem('inboxloops_admin_token');
+      document.getElementById('loginError').textContent = 'انتهت الجلسة، سجّل الدخول مجددًا';
+      return;
+    }
+    const drafts = await res.json();
+    document.getElementById('login').style.display = 'none';
+    document.getElementById('dashboard').style.display = 'block';
+    renderDrafts(drafts);
+    fetchLeads();
+  }catch(e){
+    document.getElementById('loginError').textContent = 'تعذر الاتصال بالخادم';
+  }
+}
+
+// دخول تلقائي لو فيه جلسة محفوظة صالحة
+if(TOKEN) fetchDrafts();
+
+
+const statusLabels = {
+  pending_agency_review: 'بانتظار مراجعتك',
+  pending_client_review: 'بانتظار موافقة العميل',
+  needs_agency_recheck: '⚠️ العميل طلب تعديل جوهري',
+  ready_to_schedule: 'جاهزة للجدولة',
+  sent: 'تم الإرسال'
+};
+
+function renderDrafts(drafts){
+  const list = document.getElementById('list');
+  if(drafts.length === 0){
+    list.innerHTML = '<div class="empty">لا توجد مسودات حاليًا</div>';
+    return;
+  }
+  list.innerHTML = drafts.map(d => `
+    <div class="card">
+      <div class="status">${escapeHtml(statusLabels[d.status] || d.status)}</div>
+      <h3>${escapeHtml(d.clientName || 'عميل غير معروف')} — ${escapeHtml(d.clientEmail || '')}</h3>
+      ${d.clientNote ? `<div class="meta">ملاحظة العميل: ${escapeHtml(d.clientNote)}</div>` : ''}
+      <div class="preview-tabs">
+        <button class="tab-btn active" onclick="showTab(this, 'edit-${d.id}')">✏️ تعديل النص</button>
+        <button class="tab-btn" onclick="showTab(this, 'preview-${d.id}')">👁️ معاينة كيف تبدو فعليًا</button>
+      </div>
+      <div class="meta">التظليل الأصفر بالمعاينة = جزء غير متأكد منه المساعد (مرّر الفأرة لمعرفة السبب) — يُزال تلقائيًا عند الاعتماد</div>
+      <textarea id="text-${d.id}" class="tab-pane" data-tab="edit-${d.id}" oninput="updatePreview('${d.id}')">${escapeHtml(d.draftText)}</textarea>
+      <div id="preview-${d.id}" class="tab-pane email-preview" style="display:none;">
+        <div class="email-preview-inner" id="preview-body-${d.id}">${emailHtml(d.draftText)}</div>
+      </div>
+      <div class="actions">
+        ${d.status === 'pending_agency_review' || d.status === 'needs_agency_recheck' ? `
+          <button onclick="approve('${d.id}')">✅ اعتماد وإرسال للعميل</button>
+          <button class="btn-outline" onclick="saveEdit('${d.id}')">💾 حفظ التعديل فقط</button>
+        ` : ''}
+        ${d.status === 'pending_client_review' ? `<button class="btn-outline" onclick="resendLink('${d.id}')">🔗 توليد رابط جديد</button>` : ''}
+        ${d.status === 'ready_to_schedule' ? `<button onclick="markSent('${d.id}')">📤 تأكيد الإرسال الفعلي</button>` : ''}
+        ${d.status === 'sent' ? `<span style="font-size:12px; color:var(--accent);">${d.sentVia === 'mailchimp_auto' ? '✅ أُرسلت تلقائيًا عبر Mailchimp' : '📮 أُرسلت يدويًا'}</span>` : ''}
+        ${d.clientEmail ? `<button class="btn-outline" onclick="copyArchiveLink('${encodeURIComponent(d.clientEmail)}')">📋 نسخ رابط أرشيف العميل</button>` : ''}
+        ${d.clientEmail ? `<button class="btn-outline" onclick="connectMailchimp('${encodeURIComponent(d.clientEmail)}')">🔗 ربط Mailchimp للعميل</button>` : ''}
+        ${d.clientEmail ? `<button class="btn-outline" onclick="checkDeliverability('${encodeURIComponent(d.clientEmail)}')">🛡️ فحص ضمان الوصول</button>` : ''}
+      </div>
+      <div class="meta" style="margin-top:8px;">آخر تحديث: ${new Date(d.updatedAt).toLocaleString('ar')}</div>
+    </div>
+  `).join('');
+}
+
+async function patchDraft(id, action, extra={}){
+  const res = await fetch('/api/drafts', {
+    method:'PATCH',
+    headers:{'Content-Type':'application/json', 'Authorization': `Bearer ${TOKEN}`},
+    body: JSON.stringify({ id, action, ...extra })
+  });
+  if(res.ok) fetchDrafts();
+  else alert('حدث خطأ، حاول مرة أخرى');
+}
+
+function logout(){
+  localStorage.removeItem('inboxloops_admin_token');
+  location.reload();
+}
+
+function approve(id){
+  const text = document.getElementById(`text-${id}`).value;
+  patchDraft(id, 'agency_approve', { updatedText: text });
+}
+function saveEdit(id){
+  const text = document.getElementById(`text-${id}`).value;
+  patchDraft(id, 'agency_edit', { updatedText: text });
+}
+function emailHtml(text){
+  const lines = escapeHtml(text).split('\n').filter(Boolean);
+  const subject = lines[0] || '';
+  let body = lines.slice(1).join('\n').replace(/\n/g, '<br>');
+  // تمييز الأجزاء التي وضع المساعد عليها علامة شك
+  body = body.replace(/\{\{flag:(.*?)\}\}(.*?)\{\{\/flag\}\}/g,
+    '<mark title="⚠️ $1" style="background:#FFE9A8; padding:1px 3px; border-radius:3px; cursor:help;">$2</mark>');
+  return `<div style="font-size:17px; font-weight:600; margin-bottom:14px;">${subject}</div><div>${body}</div>`;
+}
+
+function showTab(btn, targetId){
+  const card = btn.closest('.card');
+  card.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  card.querySelectorAll('.tab-pane').forEach(p => p.style.display = 'none');
+  document.getElementById(targetId).style.display = 'block';
+}
+
+function updatePreview(id){
+  const text = document.getElementById(`text-${id}`).value;
+  document.getElementById(`preview-body-${id}`).innerHTML = emailHtml(text);
+}
+
+async function markSent(id){
+  const res = await fetch('/api/drafts', {
+    method:'PATCH',
+    headers:{'Content-Type':'application/json', 'Authorization': `Bearer ${TOKEN}`},
+    body: JSON.stringify({ id, action:'mark_sent' })
+  });
+  if(res.status === 409){
+    const data = await res.json();
+    const spfOk = data.deliverability?.spf?.found ? '✅' : '❌';
+    const dmarcOk = data.deliverability?.dmarc?.found ? '✅' : '❌';
+    const confirmSend = confirm(
+      `⚠️ فحص ضمان الوصول لم يجتز لهذا العميل:\nSPF: ${spfOk}\nDMARC: ${dmarcOk}\n\nإرسال النشرة بدون إصلاح هذا قد يوصلها لمجلد الرسائل غير المرغوبة (Spam).\n\nهل تريد الإرسال رغم ذلك؟`
+    );
+    if(confirmSend){
+      await fetch('/api/drafts', {
+        method:'PATCH',
+        headers:{'Content-Type':'application/json', 'Authorization': `Bearer ${TOKEN}`},
+        body: JSON.stringify({ id, action:'mark_sent', forceOverride: true })
+      });
+      fetchDrafts();
+    }
+    return;
+  }
+  if(res.ok) fetchDrafts();
+  else alert('حدث خطأ، حاول مرة أخرى');
+}
+async function checkDeliverability(email){
+  email = decodeURIComponent(email);
+  try{
+    const res = await fetch(`/api/deliverability-check?email=${encodeURIComponent(email)}`, {
+      headers: { 'Authorization': `Bearer ${TOKEN}` }
+    });
+    const data = await res.json();
+    if(!res.ok){ alert(data.error || 'تعذر إجراء الفحص'); return; }
+    const spfOk = data.spf.found ? '✅ موجود' : '❌ غير موجود';
+    const dmarcOk = data.dmarc.found ? '✅ موجود' : '❌ غير موجود';
+    alert(`نتيجة فحص ${data.domain}:\n\nSPF: ${spfOk}\nDMARC: ${dmarcOk}\n\nDKIM: يحتاج تحقق يدوي من إعدادات Domain Authentication داخل Mailchimp`);
+  }catch(e){
+    alert('تعذر إجراء الفحص');
+  }
+}
+function resendLink(id){
+  patchDraft(id, 'agency_resend_link');
+}
+async function connectMailchimp(email){
+  email = decodeURIComponent(email);
+  try{
+    const res = await fetch(`/api/mailchimp-connect?email=${encodeURIComponent(email)}`, {
+      headers: { 'Authorization': `Bearer ${TOKEN}` }
+    });
+    const data = await res.json();
+    if(!res.ok){ alert(data.error || 'تعذر توليد رابط الربط'); return; }
+    await navigator.clipboard.writeText(data.authUrl);
+    alert('تم نسخ رابط ربط Mailchimp — أرسله للعميل ليوافق من حسابه هو مباشرة (مرة واحدة فقط)');
+  }catch(e){
+    alert('تعذر نسخ الرابط');
+  }
+}
+async function copyArchiveLink(email){
+  email = decodeURIComponent(email);
+  try{
+    const res = await fetch(`/api/client-portal-link?email=${encodeURIComponent(email)}`, {
+      headers: { 'Authorization': `Bearer ${TOKEN}` }
+    });
+    const data = await res.json();
+    if(!res.ok){ alert(data.error || 'تعذر جلب الرابط'); return; }
+    const link = `${location.origin}/portal.html?email=${encodeURIComponent(email)}&token=${data.portalToken}`;
+    await navigator.clipboard.writeText(link);
+    alert('تم نسخ رابط الأرشيف — أرسله للعميل مرة واحدة، وهو ثابت لكل نشراته القادمة');
+  }catch(e){
+    alert('تعذر نسخ الرابط');
+  }
+}
+</script>
+
+</body>
+</html>
